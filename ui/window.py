@@ -85,7 +85,7 @@ class PhotoSorterApp:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def init_ui(self, initial_mode, initial_name_conflict_policy):
-        tk.Label(self.root, text="Photo Sort", font=("Arial", 18, "bold"),
+        tk.Label(self.root, text="Easy Photo Sort", font=("Arial", 18, "bold"),
                  bg="#f0f2f5").pack(pady=10)
 
         self.file_frame = tk.Frame(self.root, bd=2, relief="groove", bg="white")

@@ -152,7 +152,7 @@ The main challenge was figuring out the exact date a photo or video was taken. D
 
 - **Non-standard EXIF.** A few cameras write dates in `DD:MM:YYYY` order instead of the ISO `YYYY:MM:DD`. The app detects both and always produces the correct `YYYY/MM/` folder — no more files landing in `\25\05\...` by mistake.
 - **Smart folders.** The app creates the folder structure on demand, e.g. `<destination>/2023/10/` for an October 2023 photo.
-- **No overwriting.** If a target filename already exists, the app renames the incoming file (`image.jpg` → `image_1.jpg` → `image_2.jpg` …) so nothing is ever lost.
+- **Configurable name conflicts.** You can choose **Rename** (default) to keep both files (`image.jpg` → `image_1.jpg` → `image_2.jpg` …), or **Overwrite** to replace an existing destination file with the incoming one when the filenames match.
 - **Move vs Copy.** In **Move** mode the original file is removed from the source (uses `shutil.move`, which handles cross-drive moves on Windows). In **Copy** mode the original stays put. Both modes preserve EXIF, timestamps, and permissions.
 - **Empty-folder cleanup.** In Move mode, empty subfolders left behind in the source tree are removed automatically.
 - **Recursive scan.** Nested folders are walked with `os.walk`; you can point the app at a top-level "Photos" folder and it will find everything underneath.

@@ -29,7 +29,7 @@ from tkinter import filedialog, messagebox, ttk
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from logic.sorter import get_date, move_photo, MEDIA_EXTS
+from logic.sorter import DestinationIndex, get_date, move_photo, MEDIA_EXTS
 
 
 # Where settings live. Stored under the user's home directory so the
@@ -56,6 +56,9 @@ def save_config(cfg):
 
 
 class PhotoSorterApp:
+    PROGRESS_UPDATE_EVERY = 10
+    NAME_CONFLICT_POLICIES = ("rename", "overwrite")
+
     def __init__(self, root):
         self.root = root
         self.root.title("PhotoSort")
@@ -69,8 +72,11 @@ class PhotoSorterApp:
         saved_mode = self.config.get("mode", "move")
         if saved_mode not in ("move", "copy"):
             saved_mode = "move"
+        saved_conflict_policy = self.config.get("name_conflict_policy", "rename")
+        if saved_conflict_policy not in self.NAME_CONFLICT_POLICIES:
+            saved_conflict_policy = "rename"
 
-        self.init_ui(saved_mode)
+        self.init_ui(saved_mode, saved_conflict_policy)
 
         # Restore the UI from the loaded config
         self._restore_from_config()
@@ -78,7 +84,7 @@ class PhotoSorterApp:
         # Persist on close
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    def init_ui(self, initial_mode):
+    def init_ui(self, initial_mode, initial_name_conflict_policy):
         tk.Label(self.root, text="Photo Sort", font=("Arial", 18, "bold"),
                  bg="#f0f2f5").pack(pady=10)
 
@@ -108,6 +114,25 @@ class PhotoSorterApp:
                        command=self._save_state).pack(side="left")
         tk.Radiobutton(mode_frame, text="Copy", variable=self.mode_var,
                        value="copy", bg="white", fg="#333",
+                       selectcolor="white", activebackground="white",
+                       command=self._save_state).pack(side="left", padx=(8, 0))
+
+        # ---- Name conflict selector ----
+        conflict_frame = tk.Frame(self.file_frame, bg="white")
+        conflict_frame.pack(pady=(0, 15))
+
+        tk.Label(conflict_frame, text="If same filename exists:", bg="white",
+                 fg="#666").pack(side="left", padx=(0, 8))
+
+        self.name_conflict_policy_var = tk.StringVar(
+            value=initial_name_conflict_policy
+        )
+        tk.Radiobutton(conflict_frame, text="Rename", variable=self.name_conflict_policy_var,
+                       value="rename", bg="white", fg="#333",
+                       selectcolor="white", activebackground="white",
+                       command=self._save_state).pack(side="left")
+        tk.Radiobutton(conflict_frame, text="Overwrite", variable=self.name_conflict_policy_var,
+                       value="overwrite", bg="white", fg="#333",
                        selectcolor="white", activebackground="white",
                        command=self._save_state).pack(side="left", padx=(8, 0))
 
@@ -161,7 +186,25 @@ class PhotoSorterApp:
             "source_folder": self.source_folder,
             "destination_folder": self.destination_folder,
             "mode": self.mode_var.get(),
+            "name_conflict_policy": self.name_conflict_policy_var.get(),
         })
+
+    @staticmethod
+    def _paths_conflict(source, destination):
+        if not source or not destination:
+            return False
+
+        src = os.path.abspath(source)
+        dst = os.path.abspath(destination)
+        if src == dst:
+            return True
+
+        try:
+            common = os.path.commonpath([src, dst])
+        except ValueError:
+            return False
+
+        return common == src or common == dst
 
     def _set_dest_entry(self, folder):
         self.dest_label.config(state="normal")
@@ -198,16 +241,23 @@ class PhotoSorterApp:
 
     # ---------- helpers ----------
     @staticmethod
-    def _count_images(folder):
-        try:
-            return sum(
-                1
-                for _, _, files in os.walk(folder)
-                for f in files
-                if os.path.splitext(f)[1].lower() in MEDIA_EXTS
-            )
-        except OSError:
-            return 0
+    def _is_media_file(name):
+        return os.path.splitext(name)[1].lower() in MEDIA_EXTS
+
+    def _iter_media_files(self, root_folder):
+        for dirpath, _, filenames in os.walk(root_folder):
+            for name in filenames:
+                if self._is_media_file(name):
+                    yield os.path.join(dirpath, name)
+
+    def _collect_media_files(self, folder):
+        return list(self._iter_media_files(folder))
+
+    def _count_media_files(self, folder):
+        return sum(1 for _ in self._iter_media_files(folder))
+
+    def _count_images(self, folder):
+        return self._count_media_files(folder)
 
     @staticmethod
     def _prune_empty_dirs(root_dir):
@@ -244,9 +294,22 @@ class PhotoSorterApp:
         if not self.destination_folder:
             messagebox.showwarning("Warning", "Please select a destination folder!")
             return
-        if os.path.abspath(self.source_folder) == os.path.abspath(self.destination_folder):
-            messagebox.showwarning("Warning", "Source and destination must be different!")
+        if self._paths_conflict(self.source_folder, self.destination_folder):
+            messagebox.showwarning(
+                "Warning",
+                "Source and destination folders must be different and not overlap!"
+            )
             return
+        if self.name_conflict_policy_var.get() == "overwrite":
+            proceed = messagebox.askyesno(
+                "Confirm overwrite",
+                "Overwrite mode is enabled.\n\n"
+                "Files in the destination with the same filename will be replaced.\n"
+                "This cannot be undone.\n\n"
+                "Do you want to continue?"
+            )
+            if not proceed:
+                return
 
         self.sort_btn.config(state="disabled")
         self._reset_progress()
@@ -257,13 +320,9 @@ class PhotoSorterApp:
         src = self.source_folder
         dst = self.destination_folder
         mode = self.mode_var.get()
+        name_conflict_policy = self.name_conflict_policy_var.get()
 
-        files = [
-            os.path.join(dirpath, f)
-            for dirpath, _, filenames in os.walk(src)
-            for f in filenames
-            if os.path.splitext(f)[1].lower() in MEDIA_EXTS
-        ]
+        files = self._collect_media_files(src)
 
         total = len(files)
         if total == 0:
@@ -275,33 +334,62 @@ class PhotoSorterApp:
 
         self._set_progress(0, total)
 
-        done, failed = 0, 0
+        dest_index = DestinationIndex(dst)
+
+        done, failed, overwritten = 0, 0, 0
         for i, path in enumerate(files, start=1):
             name = os.path.basename(path)
-            self._set_progress(i - 1, total, name)
+            should_update = (
+                i == 1
+                or i == total
+                or i % self.PROGRESS_UPDATE_EVERY == 0
+            )
+            if should_update:
+                self._set_progress(i - 1, total, name)
             try:
-                date = get_date(path)
-                move_photo(path, date, dst, mode=mode)
+                date, date_source = get_date(path, return_source=True)
+                result = move_photo(
+                    path,
+                    date,
+                    dst,
+                    mode=mode,
+                    overwrite_same_name=(name_conflict_policy == "overwrite"),
+                    write_exif_from_filename=(mode == "copy" and date_source == "filename"),
+                    dest_index=dest_index,
+                    date_source=date_source,
+                )
+                if result == "overwritten":
+                    overwritten += 1
                 done += 1
             except Exception as e:
                 failed += 1
                 print(f"Failed on {path}: {e}")
-            self._set_progress(i, total, name)
+            if should_update:
+                self._set_progress(i, total, name)
 
         if mode == "move":
             self._prune_empty_dirs(src)
 
-        self.root.after(0, lambda: self._on_done(done, failed, mode, total))
+        self.root.after(0, lambda: self._on_done(done, failed, overwritten, mode, total))
 
-    def _on_done(self, done, failed, mode, total):
+    def _on_done(self, done, failed, overwritten, mode, total):
         verb = "Copied" if mode == "copy" else "Moved"
+        details = f"Photos sorted!\n{verb}: {done}\nFailed: {failed}"
+        if overwritten:
+            details += f"\nOverwritten: {overwritten}"
         messagebox.showinfo(
             "Success",
-            f"Photos sorted!\n{verb}: {done}\nFailed: {failed}"
+            details
         )
         self.progress_label.config(text=f"Done — {done} / {total}")
-        self.source_folder = ""
-        self.file_label.config(text="No source folder selected")
+        if self.source_folder and os.path.isdir(self.source_folder):
+            remaining = self._count_images(self.source_folder)
+            self.file_label.config(
+                text=f"Source: {self.source_folder}\n"
+                     f"{remaining} media file(s) found (recursive)")
+        else:
+            self.source_folder = ""
+            self.file_label.config(text="No source folder selected")
         self.sort_btn.config(state="normal")
         self._save_state()
 
